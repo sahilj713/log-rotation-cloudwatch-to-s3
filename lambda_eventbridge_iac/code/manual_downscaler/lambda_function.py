@@ -1,81 +1,74 @@
 import boto3
-import datetime
+import os
+from pprint import pprint
+import time
 
-
-
-ecs = boto3.client('ecs')
-
+logs = boto3.client('logs')
+ssm = boto3.client('ssm')
 
 def lambda_handler(event, context):
-   main()
-   
-   
-def get_cluster_name():
-    print(f"Fetching clusters ...")
-
-    cluster_arns = []
-    clusters = []
-    response = ecs.list_clusters()
-    while 'nextToken' in response:
-        cluster_arns += response['clusterArns']
-        response = ecs.list_clusters(nextToken=response['nextToken'])
-    cluster_arns += response['clusterArns']
+    extra_args = {}
+    log_groups = []
+    log_groups_to_export = []
     
-    for arn in cluster_arns:
-        clusters.append(arn.split('/')[-1])
-
-    return clusters 
-
-def downscale_service(service_name, cluster_name):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"Downscaling service {service_name} in cluster {cluster_name}...")
-    
-    response = ecs.update_service(
-        cluster=cluster_name,
-        service=service_name,
-        desiredCount=0
-    )
-    
-    if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-        ecs.untag_resource(
-            resourceArn=response['service']['serviceArn'],
-            tagKeys=[
-               'Lifecycle',
-               'Started_At_UTC',
-               'Started_By',
-               'Active_till_UTC',
-               'Active_duration'
-            ]
-            )
-        print(f"Service {service_name} downscaled successfully.")
-
- 
-def main():
-    
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
-    cluster_name = get_cluster_name()
-    if not cluster_name:
+    if 'S3_BUCKET' not in os.environ:
+        print("Error: S3_BUCKET not defined")
         return
     
-    # for cluster in cluster
-    for cluster in cluster_name:
-        print(f"Listing services in cluster {cluster}...")
-        response = ecs.list_services(
-            cluster=cluster,
-            maxResults=100
-        )
+    print("--> S3_BUCKET=%s" % os.environ["S3_BUCKET"])
     
-        for service_arn in response['serviceArns']:
-            service_name = service_arn.split('/')[-1]
-            print(f"Checking service {service_name}...")
-            response = ecs.list_tags_for_resource(
-                resourceArn=service_arn
+    while True:
+        response = logs.describe_log_groups(**extra_args)
+        log_groups = log_groups + response['logGroups']
+        
+        if not 'nextToken' in response:
+            break
+        extra_args['nextToken'] = response['nextToken']
+    
+    for log_group in log_groups:
+        response = logs.list_tags_log_group(logGroupName=log_group['logGroupName'])
+        log_group_tags = response['tags']
+        if 'environment' in log_group_tags and log_group_tags['environment'] == 'PROD':
+            log_groups_to_export.append(log_group['logGroupName'])
+    
+    for log_group_name in log_groups_to_export:
+        ssm_parameter_name = ("/log-exporter-last-export/%s" % log_group_name).replace("//", "/")
+        try:
+            ssm_response = ssm.get_parameter(Name=ssm_parameter_name)
+            ssm_value = ssm_response['Parameter']['Value']
+        except ssm.exceptions.ParameterNotFound:
+            ssm_value = "0"
+        
+        export_to_time = int(round(time.time() * 1000))
+        
+        print("--> Exporting %s to %s" % (log_group_name, os.environ['S3_BUCKET']))
+        
+        if export_to_time - int(ssm_value) < (24 * 60 * 60 * 1000):
+            # Haven't been 24hrs from the last export of this log group
+            print("    Skipped until 24hrs from last export is completed")
+            continue
+        
+        try:
+            response = logs.create_export_task(
+                logGroupName=log_group_name,
+                fromTime=int(ssm_value),
+                to=export_to_time,
+                destination=os.environ['S3_BUCKET'],
+                destinationPrefix=log_group_name.strip("/")
             )
-            print(response)
-            tags = response['tags']
-            lifecycle_tag = next((tag for tag in tags if tag['key'] == 'Lifecycle'), None)
-            active_till_tag = next((tag for tag in tags if tag['key'] == 'Active_till_UTC'), None)
-            if lifecycle_tag and lifecycle_tag['value'] == 'true':
-                if active_till_tag and active_till_tag['value'] < timestamp:
-                    downscale_service(service_name, cluster)
-                   
+            print("    Task created: %s" % response['taskId'])
+            time.sleep(5)
+            
+        except logs.exceptions.LimitExceededException:
+            print("    Need to wait until all tasks are finished (LimitExceededException). Continuing later...")
+            return
+        
+        except Exception as e:
+            print("    Error exporting %s: %s" % (log_group_name, getattr(e, 'message', repr(e))))
+            continue
+        
+        ssm_response = ssm.put_parameter(
+            Name=ssm_parameter_name,
+            Type="String",
+            Value=str(export_to_time),
+            Overwrite=True)
