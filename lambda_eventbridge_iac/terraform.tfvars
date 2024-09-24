@@ -6,10 +6,10 @@ lambda_timeout = 180
 lambda_functions= {
   DEV_environment_vls_ecs_upscaler={
     
-    source_code_file_location = "code/upscaler/lambda_function.py"
-    schedule_rate = "cron(30 3 ? * MON-FRI *)"
+    source_code_file_location = "code/manual_downscaler/lambda_function.py"
+    schedule_rate = "cron(0/5 * * * ? *)"
     env_vars ={
-      environment = "DEV"
+      environment = "PROD"
       application_group = "Valere-Services"
 
     }
