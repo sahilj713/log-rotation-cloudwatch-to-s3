@@ -10,51 +10,12 @@ lambda_functions= {
     schedule_rate = "cron(0/5 * * * ? *)"
     env_vars ={
       environment = "PROD"
+      S3_BUCKET = "rotate-logs-to-s3"
       application_group = "Valere-Services"
 
     }
     tags = {
       "environment" = "DEV"
-      "Terraform" = "true"
-    }
-  },
-
-  DEV_environment_vls_ecs_downscaler={
-    source_code_file_location = "code/downscaler/lambda_function.py"
-    schedule_rate = "cron(30 18 ? * MON-FRI *)"
-    env_vars ={
-      environment = "DEV"
-      application_group = "Valere-Services"
-
-    }
-    tags = {
-      "environment" = "DEV"
-      "Terraform" = "true"
-    }
-  },
-
-  UAT_environment_ecs_upscaler={
-    source_code_file_location = "code/upscaler/lambda_function.py"
-    schedule_rate = "cron(30 3 ? * MON *)"
-    env_vars ={
-      environment = "UAT"
-      application_group = "Valere-Services"
-    }
-    tags = {
-      "environment" = "UAT"
-      "Terraform" = "true"
-    }
-  },
-
-    UAT_environment_ecs_downscaler={
-    source_code_file_location = "code/downscaler/lambda_function.py"
-    schedule_rate = "cron(30 23 ? * FRI *)"
-    env_vars ={
-      environment = "UAT"
-      application_group = "Valere-Services"
-    }
-    tags = {
-      "environment" = "UAT"
       "Terraform" = "true"
     }
   },
